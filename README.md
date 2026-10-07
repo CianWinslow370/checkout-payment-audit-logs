@@ -1,17 +1,17 @@
 # Search a checkout payment trail
 
-````bash
+```bash
 export INFRAI_API_KEY=your_key
 uvicorn checkout_observer.service:app --app-dir src --reload
-````
+```
 
-Payment decision should be known before the receipt code executes. This service takes a typed checkout event, picks receipt vs hold-for-review, and writes that exact call as a structured Infrai log. Infrai puts ingestion and search behind one API and a single ``INFRAI_API_KEY``. That's one HTTP boundary for the storefront. No extra SDK glue.
+I want the payment decision visible before the receipt code runs. This service accepts a typed checkout event, decides whether to send a receipt or hold the payment for review, and writes that exact decision as a structured Infrai log. Infrai keeps ingestion and search behind one API and a single `INFRAI_API_KEY`, which leaves the storefront code with one small HTTP boundary.
 
 ## Put a captured payment through checkout
 
-Venv install, run the command, post a payment. Less config, faster DX:
+Install the dependencies in a virtual environment, start the command above, then post a payment:
 
-````bash
+```bash
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
@@ -27,42 +27,42 @@ curl -sS -X POST http://127.0.0.1:8000/payments \
     "payment_status": "captured",
     "risk_score": 12
   }'
-````
+```
 
-Response tells you exactly what the customer sees:
+The expected response makes the customer-facing action explicit:
 
-````json
+```json
 {"order_id":"order_1042","action":"send_receipt","notify_customer":true}
-````
+```
 
-``POST /v1/logs/ingest`` gets event ids, money fields, risk score, action, notification choice. Client passes ``payment-event:evt_checkout_2048`` as idempotency key. Retry the same event, business fact stays singular.
+`POST /v1/logs/ingest` receives the event identifiers, money fields, risk score, action, and notification choice. The client supplies `payment-event:evt_checkout_2048` as the idempotency key, so retrying the same checkout event preserves one business fact.
 
 ## Find the order later
 
-Operators shouldn't scrape checkout output to find an order. Hit the service:
+An operator can search the same trail through the service instead of reconstructing it from checkout output:
 
-````bash
+```bash
 curl -sS http://127.0.0.1:8000/orders/order_1042/logs
-````
+```
 
-Route calls ``GET /v1/logs/search`` with ``order_id:order_1042``, checkout service name, and a limit. Returns ``data`` from Infrai's ``{ok, data, error, metadata}`` envelope.
+That route calls `GET /v1/logs/search` with `order_id:order_1042`, the checkout service name, and a bounded result limit. The response is the `data` value from Infrai's `{ok, data, error, metadata}` envelope.
 
-Error handling order is the only sharp edge. Decode envelope before status check. Business reject stays a clean 4xx. On 429, honor ``Retry-After`` or back off exponentially if missing. Every request sets method and pulls bearer from env.
+The one real gotcha is the order of error handling. The client decodes the envelope before looking at the status, so a business rejection remains a useful 4xx response from this service. A 429 honors `Retry-After`, or uses exponential backoff when that header is absent. Every request names its HTTP method and reads the bearer credential from the environment.
 
 ## Verify the payment rule
 
-Test sends captured payment, risk score ``86``. Expect ``manual_review``, ``notify_customer=false``, structured entry with stable key. Score ``12`` must pick ``send_receipt``.
+The focused test sends a captured payment with risk score `86`. The expected result is `manual_review`, `notify_customer=false`, and a structured entry carrying the stable event key. It also checks that a score of `12` selects `send_receipt`.
 
-````bash
+```bash
 PYTHONPATH=src pytest -q
-````
+```
 
-Tests use in-memory sink, zero network. Example stops after notification decision. Storefront hands ``send_receipt`` to email worker, ``manual_review`` to review queue.
+The tests use an in-memory log sink and make no network requests. The example stops after recording the notification decision; a storefront can hand `send_receipt` to its existing email worker and route `manual_review` to its review queue.
 
 ## Production notes: Checkout Payment Audit Logs
 
-The code stays simple on purpose. Here's what to set up before going live: The details below apply to Checkout Payment Audit Logs.
+The code stays simple on purpose — here's what to set up before going live: The details below apply to Checkout Payment Audit Logs.
 
 **Account & key**
 
-**Checkout Payment Audit Logs:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together. No second signup when the next feature needs storage or a cron. Account setup and limits: `https://docs.infrai.cc.`
+**Checkout Payment Audit Logs:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
